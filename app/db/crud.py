@@ -1,30 +1,33 @@
 """
-Модуль Data Access Layer (DAL) для работы с локальной базой данных SQLite.
-Реализует CRUD-операции для сущностей Post и Tag с использованием SQLAlchemy ORM.
+Модуль уровня доступа к данным (Data Access Layer).
+Реализует операции создания, чтения, обновления и удаления (CRUD)
+для сущностей Post и Tag с использованием SQLAlchemy ORM.
 """
 from sqlalchemy.orm import Session, selectinload
+from sqlalchemy import or_
 from app.db.models import Post, Tag, Base
 from app.db.database import engine, SessionLocal
 
 
 def init_db() -> None:
-    """Инициализирует схему базы данных, создавая отсутствующие таблицы."""
+    """Создает все необходимые таблицы в базе данных на основе описанных моделей."""
     Base.metadata.create_all(bind=engine)
     print("INFO: База данных успешно инициализирована.")
 
 
 def save_reddit_posts_to_db(posts_data: list[dict]) -> int:
     """
-    Синхронизирует полученные из внешнего источника посты с локальной БД.
-    Игнорирует существующие записи во избежание дублирования.
+    Сохраняет извлеченные записи в локальную базу данных.
+    Игнорирует уже существующие записи во избежание дублирования данных.
 
-    :param posts_data: Список словарей с метаданными постов.
+    :param posts_data: Список словарей с метаданными записей.
     :return: Количество успешно добавленных новых записей.
     """
     db: Session = SessionLocal()
     saved_count = 0
     try:
         for p_data in posts_data:
+            # Проверка наличия записи по её уникальному идентификатору
             existing_post = db.query(Post).filter(Post.id == p_data['id']).first()
             if not existing_post:
                 new_post = Post(
@@ -35,25 +38,29 @@ def save_reddit_posts_to_db(posts_data: list[dict]) -> int:
                 )
                 db.add(new_post)
                 saved_count += 1
+
+        # Фиксация изменений в базе данных (завершение транзакции)
         db.commit()
         return saved_count
     except Exception as e:
+        # Откат изменений в случае непредвиденной ошибки
         db.rollback()
         print(f"ERROR: Ошибка транзакции при сохранении постов: {e}")
         return 0
     finally:
+        # Обязательное закрытие сессии для освобождения ресурсов
         db.close()
 
 
 def get_all_posts() -> list[Post]:
     """
-    Извлекает все сохраненные посты.
-    Использует eager loading (selectinload) для связанных тегов,
-    предотвращая проблему N+1 запросов и DetachedInstanceError на уровне представления.
+    Извлекает все активные (не удаленные) записи из базы.
+    Использует предварительную загрузку (selectinload) для связанных тегов,
+    что предотвращает проблему избыточных запросов (N+1) при отображении интерфейса.
     """
     db: Session = SessionLocal()
     try:
-        return db.query(Post).options(selectinload(Post.tags)).all()
+        return db.query(Post).options(selectinload(Post.tags)).filter(Post.is_deleted == False).all()
     except Exception as e:
         print(f"ERROR: Ошибка при извлечении постов: {e}")
         return []
@@ -62,7 +69,7 @@ def get_all_posts() -> list[Post]:
 
 
 def get_all_tags() -> list[Tag]:
-    """Возвращает список всех уникальных пользовательских тегов."""
+    """Возвращает список всех существующих пользовательских категорий."""
     db: Session = SessionLocal()
     try:
         return db.query(Tag).all()
@@ -72,12 +79,12 @@ def get_all_tags() -> list[Tag]:
 
 def add_tag_to_post(post_id: str, tag_name: str) -> bool:
     """
-    Присваивает тег указанному посту.
-    Реализует паттерн 'get_or_create' для сущности Tag перед привязкой.
+    Назначает тег указанной записи.
+    Если тега с таким именем не существует, он создается автоматически.
 
-    :param post_id: Идентификатор поста.
+    :param post_id: Идентификатор целевой записи.
     :param tag_name: Название тега (будет приведено к нижнему регистру).
-    :return: True, если тег успешно добавлен, иначе False.
+    :return: Успешность операции (True/False).
     """
     db: Session = SessionLocal()
     try:
@@ -89,13 +96,15 @@ def add_tag_to_post(post_id: str, tag_name: str) -> bool:
         if not post:
             return False
 
+        # Поиск существующего тега или создание нового
         tag = db.query(Tag).filter(Tag.name == tag_name).first()
         if not tag:
             tag = Tag(name=tag_name)
             db.add(tag)
-            # flush используется для получения ID тега до коммита транзакции
+            # Принудительная отправка SQL-запроса для получения ID нового тега
             db.flush()
 
+        # Проверка на дублирование перед привязкой
         if tag not in post.tags:
             post.tags.append(tag)
             db.commit()
@@ -112,15 +121,23 @@ def add_tag_to_post(post_id: str, tag_name: str) -> bool:
 
 def search_posts_by_title(search_query: str) -> list[Post]:
     """
-    Выполняет полнотекстовый поиск подстроки в заголовках постов (case-insensitive).
-    Оптимизировано на уровне СУБД с использованием оператора ILIKE.
+    Выполняет полнотекстовый поиск подстроки в заголовках И названиях сообществ (сабреддитов).
+    Оптимизировано на уровне базы данных с использованием оператора поиска без учета регистра (ILIKE)
+    и логического ветвления (OR).
     """
     db: Session = SessionLocal()
     try:
         formatted_query = f"%{search_query}%"
-        return db.query(Post)\
-            .options(selectinload(Post.tags))\
-            .filter(Post.title.ilike(formatted_query))\
+        return db.query(Post) \
+            .options(selectinload(Post.tags)) \
+            .filter(
+            # Использование оператора or_ для расширения области поиска на две колонки
+            or_(
+                Post.title.ilike(formatted_query),
+                Post.subreddit.ilike(formatted_query)
+            ),
+            Post.is_deleted == False
+        ) \
             .all()
     except Exception as e:
         print(f"ERROR: Ошибка при поиске '{search_query}': {e}")
@@ -131,20 +148,46 @@ def search_posts_by_title(search_query: str) -> list[Post]:
 
 def delete_post_from_db(post_id: str) -> bool:
     """
-    Удаляет пост из локальной базы данных.
-    Каскадное удаление связей в таблице post_tags обеспечивается настройками ORM.
+    Логическое удаление: помечает запись как удаленную, не стирая её физически из таблицы.
+    Это необходимо для безопасной работы корзины и предотвращения повторной загрузки.
     """
     db: Session = SessionLocal()
     try:
         post = db.query(Post).filter(Post.id == post_id).first()
         if post:
-            db.delete(post)
+            post.is_deleted = True
             db.commit()
             return True
         return False
     except Exception as e:
         db.rollback()
         print(f"ERROR: Ошибка при удалении поста {post_id}: {e}")
+        return False
+    finally:
+        db.close()
+
+
+def get_deleted_posts() -> list[Post]:
+    """Извлекает записи, которые были перемещены пользователем в корзину."""
+    db: Session = SessionLocal()
+    try:
+        return db.query(Post).options(selectinload(Post.tags)).filter(Post.is_deleted == True).all()
+    finally:
+        db.close()
+
+
+def restore_post_in_db(post_id: str) -> bool:
+    """Восстанавливает запись из корзины, возвращая её в основной список."""
+    db: Session = SessionLocal()
+    try:
+        post = db.query(Post).filter(Post.id == post_id).first()
+        if post:
+            post.is_deleted = False
+            db.commit()
+            return True
+        return False
+    except Exception as e:
+        db.rollback()
         return False
     finally:
         db.close()

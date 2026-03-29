@@ -1,7 +1,8 @@
 """
 Модуль интеграционного слоя (Service Layer).
-Отвечает за взаимодействие с внешним источником данных (платформа Reddit)
-через легитимный механизм приватных RSS/JSON лент.
+Отвечает за взаимодействие с внешним источником данных (платформой Reddit)
+через легитимный механизм приватных лент (JSON-шлюз).
+Реализует внедрение сессионных файлов (Cookie) для обхода сетевых политик платформы.
 """
 import requests
 from app.core.config import settings
@@ -9,34 +10,44 @@ from app.core.config import settings
 
 def fetch_saved_posts() -> list[dict]:
     """
-    Выполняет агрегацию сохраненных записей пользователя через приватный JSON-шлюз.
-    Реализует десериализацию и нормализацию (Data Mapping) входящей структуры данных
-    для последующей передачи на слой доступа к данным (DAL).
+    Выполняет агрегацию сохраненных записей пользователя.
+    Реализует десериализацию и нормализацию (преобразование форматов)
+    входящей структуры данных для последующей передачи слою бизнес-логики.
 
-    :return: Список нормализованных словарей с метаданными постов.
+    :return: Список нормализованных словарей с метаданными записей.
     :raises ValueError: В случае отсутствия конфигурационного URL-адреса.
     """
     if not settings.REDDIT_PRIVATE_FEED_URL:
         raise ValueError("CRITICAL: В переменных окружения не задан параметр REDDIT_PRIVATE_FEED_URL")
 
-    # Передача кастомного заголовка User-Agent необходима для прохождения
-    # базовых антибот-фильтров (WAF) на стороне сервера платформы
+    # Использование пользовательского заголовка для маскировки под стандартный веб-браузер
     headers = {"User-Agent": settings.USER_AGENT}
 
+    # Подготовка словаря с идентификаторами сессии для подтверждения авторизации пользователя
+    cookies = {}
+    if hasattr(settings, 'REDDIT_SESSION_COOKIE') and settings.REDDIT_SESSION_COOKIE:
+        cookies['reddit_session'] = settings.REDDIT_SESSION_COOKIE
+
     print("INFO: Инициализация HTTP-запроса к приватному шлюзу Reddit...")
-    response = requests.get(settings.REDDIT_PRIVATE_FEED_URL, headers=headers)
+
+    # Отправка сетевого запроса с передачей заголовков и параметров сессии
+    response = requests.get(
+        settings.REDDIT_PRIVATE_FEED_URL,
+        headers=headers,
+        cookies=cookies
+    )
 
     if response.status_code == 200:
         data = response.json()
         posts = []
 
-        # Безопасное извлечение вложенных структур JSON
+        # Безопасное извлечение вложенных структур из ответа сервера
         children = data.get('data', {}).get('children', [])
         for item in children:
             post_data = item.get('data', {})
 
-            # Фильтрация объектов: префикс 't3' в API Reddit жестко соответствует
-            # типу сущности "Пост" (Link/Text Post). Комментарии ('t1') игнорируются.
+            # Фильтрация объектов: системный префикс 't3' строго соответствует
+            # типу сущности "Запись" (Text/Link Post). Комментарии игнорируются.
             if item.get('kind') == 't3':
                 posts.append({
                     "id": post_data.get("name"),
@@ -50,4 +61,6 @@ def fetch_saved_posts() -> list[dict]:
 
     else:
         print(f"ERROR: Ошибка интеграционного шлюза. HTTP Status: {response.status_code}")
+        if response.status_code == 403:
+            print("INFO: Возможно, сессионный Cookie истек или скопирован неверно.")
         return []

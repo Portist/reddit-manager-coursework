@@ -1,7 +1,7 @@
 """
 Модуль оркестрации (Service Layer).
-Управляет пайплайном синхронизации данных: извлечение из внешнего API и загрузка в БД (ETL).
-Подготовлен для внедрения промежуточного шага трансформации (NLP/Кластеризация).
+Управляет процессом извлечения, преобразования и загрузки данных (ETL-процесс).
+Выступает посредником между интеграционным клиентом и слоем доступа к данным.
 """
 from app.services.reddit_client import fetch_saved_posts
 from app.db.crud import save_reddit_posts_to_db
@@ -9,16 +9,15 @@ from app.db.crud import save_reddit_posts_to_db
 
 def run_sync_pipeline() -> int:
     """
-    Запускает полный цикл агрегации данных.
+    Запускает полный цикл синхронизации данных.
 
-    :return: Количество новых успешно сохраненных записей.
+    :return: Количество новых успешно сохраненных записей в локальной базе данных.
     """
+    # 1. Извлечение данных из внешнего источника
     fetched_data = fetch_saved_posts()
     if not fetched_data:
         return 0
 
-    # Место для будущего расширения (NLP, векторизация текста, TF-IDF)
-    # enriched_data = process_text_data(fetched_data)
-
+    # 2. Загрузка нормализованных данных в локальное хранилище
     added_count = save_reddit_posts_to_db(fetched_data)
     return added_count
