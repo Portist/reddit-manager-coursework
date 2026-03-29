@@ -191,3 +191,40 @@ def restore_post_in_db(post_id: str) -> bool:
         return False
     finally:
         db.close()
+
+
+def remove_tag_from_post(post_id: str, tag_name: str) -> bool:
+    """
+    Удаляет связь между указанной записью и категорией (тегом).
+    Реализует механизм сборки мусора (Garbage Collection): если после удаления
+    тег больше не привязан ни к одной записи, он удаляется из базы данных.
+
+    :param post_id: Идентификатор целевой записи.
+    :param tag_name: Название тега для удаления.
+    :return: Успешность операции (True/False).
+    """
+    db: Session = SessionLocal()
+    try:
+        post = db.query(Post).filter(Post.id == post_id).first()
+        if not post:
+            return False
+
+        tag = db.query(Tag).filter(Tag.name == tag_name).first()
+        # Если тег найден и он действительно привязан к этому посту
+        if tag and tag in post.tags:
+            post.tags.remove(tag)
+
+            # Если этот тег больше не привязан ни к одному посту - удаляем его насовсем
+            if len(tag.posts) == 0:
+                db.delete(tag)
+
+            db.commit()
+            return True
+
+        return False
+    except Exception as e:
+        db.rollback()
+        print(f"ERROR: Ошибка при удалении тега '{tag_name}' у записи {post_id}: {e}")
+        return False
+    finally:
+        db.close()
