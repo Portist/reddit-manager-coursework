@@ -57,7 +57,7 @@ REDDIT_PRIVATE_FEED_URL=[https://old.reddit.com/user/ВАШ_НИК/saved.json?fe
 REDDIT_SESSION_COOKIE=ВАШ_СЕССИОННЫЙ_COOKIE
 ```
 Здесь необходимо вставить свой **НИК** , **JSON-ТОКЕН**, **СЕССИОННЫЙ COOKIE**
-- Ник можно посмотреть в самом Reddit. ()
+- Ник можно посмотреть в самом Reddit. (без **u/**)
 - Далее нужно на сайте старого интерфейса https://old.reddit.com/prefs/feeds/ нажать на кнопку **JSON** раздела **private listings** рядом с надписью **your saved links**
 
 ![coursework_readme_1](https://github.com/user-attachments/assets/c4cbe057-24ae-457e-9bd0-4b1433ec8a84)
