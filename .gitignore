@@ -3,8 +3,9 @@ venv/
 .venv/
 env/
 
-# Секреты и конфигурация
+# Секреты и локальная конфигурация
 .env
+.streamlit/secrets.toml
 
 # База данных
 data/
@@ -12,7 +13,16 @@ data/
 *.sqlite
 *.sqlite3
 
-# Кэш Питона
+# Кэш Python
 __pycache__/
-*.pyc
-*.pyo
+*.py[cod]
+*$py.class
+
+# Конфигурации редакторов кода и IDE (VS Code, PyCharm)
+.vscode/
+.idea/
+*.swp
+
+# Системные файлы ОС
+.DS_Store
+Thumbs.db
